@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>숏폼 광고 생성기</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header class="row"><h1>숏폼 광고 영상 생성기</h1><span id="tts-status" class="meta"></span></header>
+
+  <main>
+    <section class="card">
+      <h2>새 에피소드</h2>
+      <form id="episode-form">
+        <label>제목 <input name="title" required></label>
+        <label>도서명 <input name="product_name" value="래퍼의 노트" required></label>
+        <label>도서 소개 <textarea name="product_description" rows="2"></textarea></label>
+        <label>원문 발췌 <textarea name="source_text" rows="8" required placeholder="광고에 사용할 『래퍼의 노트』 원문을 붙여넣으세요"></textarea></label>
+        <label>타깃 시청자 <input name="target_audience" placeholder="예: 책과 힙합에 관심 있는 20~30대"></label>
+        <label>영상 길이(초) <input name="duration_sec" type="number" value="30" min="5" max="180"></label>
+        <fieldset class="heroine-fields" data-heroine>
+          <legend>여자주인공</legend>
+          <label class="inline"><input type="checkbox" name="heroine_enabled" data-role="heroine-toggle"> 여자주인공 등장</label>
+<div class="heroine-config">
+            <label>캐릭터 폴더 <span class="meta">(media/images 아래 폴더 — 새 폴더를 만들면 목록에 나타납니다)</span>
+              <select data-role="heroine-folder" disabled><option>불러오는 중…</option></select></label>
+            <label class="heroine-custom" hidden>폴더 경로 직접 입력 <span class="meta">(media 폴더 안 — 상대 경로 또는 절대 경로)</span>
+              <input name="heroine_dir" value="media/images/caoting" disabled
+                     placeholder="media/images/actor_b 또는 C:\dev\Advertisement-Video-Generator\media\images\actor_b"></label>
+            <button type="button" class="secondary small" data-action="load-heroine" disabled>이미지 불러오기</button>
+            <div class="meta">대표 이미지(헤어스타일·의상 기준)를 고르세요. 나머지 이미지는 얼굴을 일관되게 유지하는 참고용으로 함께 전달됩니다.</div>
+            <div class="heroine-images"></div>
+          </div>
+        </fieldset>
+        <button type="submit">에피소드 만들기 (1단계 대본 자동 생성)</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>에피소드 목록</h2>
+        <button id="refresh" class="secondary">새로고침</button>
+      </div>
+      <ol class="workflow meta">
+        <li><b>1단계: 대본 생성 및 편집</b> — 씬별 내레이션·화면 자막·영상 프롬프트를 확인하고 수정·저장</li>
+        <li><b>2단계: 음성(TTS) 제작하기</b> — 확정된 대본으로 씬별 음성을 만들고 미리 듣기 (씬 하나만 다시 만들 수도 있음)</li>
+        <li><b>3단계: Luma 씬 영상 생성하기</b> — 씬마다 JB가 대본을 연기하는 클립 (Luma 크레딧 부족·실패 시 대체 클립)</li>
+        <li><b>4단계: 최종 FFmpeg 렌더링 실행</b> — 씬 영상 + 음성 + BGM + 자막을 합쳐 숏폼 완성, 미리보기·다운로드</li>
+      </ol>
+      <div id="episodes"></div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', path='app.js') }}"></script>
+</body>
+</html>
