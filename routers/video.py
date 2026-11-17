@@ -1,7 +1,7 @@
 """영상 제작 3·4단계 API (1·2단계 대본·음성은 routers/production.py).
 
-3단계 POST /api/generate-luma-clips  — 씬별 캐릭터 연기 클립만 생성·다운로드 (Luma Agents API).
-       크레딧 부족(402)·씬 실패·Luma 사용 불가 시 대체 클립으로 자동 전환 (mode=auto).
+3단계 POST /api/generate-scene-clips — 씬별 캐릭터 연기 클립만 생성·다운로드 (AI 씬 영상: VIDEO_PROVIDER=luma|runway).
+       크레딧 부족·씬 실패·AI 사용 불가 시 대체 클립으로 자동 전환 (mode=auto).
        진행 상황: GET /api/episodes/{id}/clips (또는 에피소드 조회의 scripts[].clip_status)
 4단계 POST /api/render-final-video   — 준비된 씬 클립 + TTS + BGM + 자막·제목 바를 FFmpeg로 최종 합성.
        클립이 없거나 대본이 바뀐 씬은 대체 클립(기본) 또는 캐릭터 카드 연출로 채운다.
@@ -15,13 +15,13 @@ from database import get_db
 from models import ClipStatus, EpisodeStatus
 from routers.common import ensure_idle, get_episode_or_404
 from schemas import ClipGenerateRequest, RenderFinalRequest
-from services import clip_service, host_service, luma_service, pipeline, render_service
+from services import clip_service, host_service, pipeline, render_service, video_ai_service
 
 router = APIRouter(prefix="/api", tags=["video"])
 
 
-@router.post("/generate-luma-clips", status_code=202)
-def generate_luma_clips(payload: ClipGenerateRequest, bg: BackgroundTasks, db: Session = Depends(get_db)):
+@router.post("/generate-scene-clips", status_code=202)
+def generate_scene_clips(payload: ClipGenerateRequest, bg: BackgroundTasks, db: Session = Depends(get_db)):
     """3단계: 대본(씬)과 캐릭터 포즈 이미지로 씬별 연기 클립 생성."""
     episode = get_episode_or_404(db, payload.episode_id)
     if not episode.scripts:
@@ -31,19 +31,20 @@ def generate_luma_clips(payload: ClipGenerateRequest, bg: BackgroundTasks, db: S
         raise HTTPException(400, "캐릭터 포즈 이미지(HOST_POSE_DIR)가 없어 씬 영상을 만들 수 없습니다.")
     if render_service.find_ffmpeg() is None:
         raise HTTPException(503, "ffmpeg를 찾을 수 없습니다 (대체 클립·렌더링에 필요).")
-    reason = luma_service.unavailable_reason()
-    if payload.mode == "luma" and reason:
-        raise HTTPException(400, f"Luma를 사용할 수 없습니다: {reason}")
+    name = video_ai_service.label()
+    reason = video_ai_service.unavailable_reason()
+    if payload.mode == "ai" and reason:
+        raise HTTPException(400, f"{name}를 사용할 수 없습니다: {reason}")
     episode.status = EpisodeStatus.CLIPPING
     db.commit()
     bg.add_task(pipeline.generate_clips_for_episode, episode.id, payload.mode, payload.force)
     if payload.mode == "fallback":
         how = "대체 클립(무료)으로"
     elif reason:
-        how = f"Luma를 사용할 수 없어({reason}) 대체 클립으로"
+        how = f"{name}를 사용할 수 없어({reason}) 대체 클립으로"
     else:
-        how = f"Luma {luma_service.status()['model']}로 (씬마다 수 분, 실패 시 대체 클립)" if payload.mode == "auto" \
-            else f"Luma {luma_service.status()['model']}로"
+        model = video_ai_service.status()["model"]
+        how = f"{name} {model}로 (씬마다 수 분, 실패 시 대체 클립)" if payload.mode == "auto" else f"{name} {model}로"
     return {"message": f"3단계 씬 영상 생성을 시작했습니다 — {how}.", "episode_id": episode.id, "mode": payload.mode}
 
 
@@ -64,7 +65,7 @@ def clip_progress(episode_id: int, db: Session = Depends(get_db)):
         "episode_status": episode.status.value,
         "total": len(scenes),
         "ready": count(lambda sc: sc["clip_path"] and sc["current"]),
-        "luma": count(lambda sc: sc["clip_path"] and sc["current"] and sc["source"] == "luma"),
+        "ai": count(lambda sc: sc["clip_path"] and sc["current"] and video_ai_service.is_ai_source(sc["source"])),
         "fallback": count(lambda sc: sc["clip_path"] and sc["current"] and sc["source"] == "fallback"),
         "generating": count(lambda sc: sc["status"] in (ClipStatus.QUEUED.value, ClipStatus.GENERATING.value)),
         "failed": count(lambda sc: sc["status"] == ClipStatus.FAILED.value),

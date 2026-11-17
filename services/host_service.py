@@ -82,13 +82,21 @@ EMOTIONS: dict[str, EmotionDef] = {
                                   "해냈", "성공", "아니라", "추천"), ("body",), ("confident", "pointing"),
                            (255, 59, 92), "sparkle"),
     "reflection": EmotionDef("공감·회상", ("기억", "그때", "생각", "마음", "밤", "혼자", "고민", "사실", "적었", "노트",
-                                       "기록", "아무도", "눈물"), ("body",), ("thinking", "confident"),
+                                       "기록", "아무도", "추억", "그 시절", "예전", "어릴", "옛날", "돌아보", "떠올",
+                                       "그날", "그리운", "지난"), ("body",), ("thinking",),
                              (56, 189, 248), "thought"),
+    "sadness": EmotionDef("슬픔·그리움", ("눈물", "울었", "울고", "울컥", "울음", "슬프", "슬픔", "아프", "아픔", "그리워",
+                                      "그리움", "그립", "보고 싶", "떠나", "떠난", "잃", "외로", "이별", "상처", "미안",
+                                      "후회", "무너", "버티", "힘들", "쓸쓸", "공허", "괴로", "아무것도", "끝내"),
+                          (), ("thinking",), (129, 140, 248), "thought"),
     "conclusion": EmotionDef("결론·행동", ("지금", "링크", "프로필", "확인", "바로", "서점", "결국", "그러니", "그래서",
                                        "당신", "여러분"), ("cta",), ("pointing", "confident", "waving"),
                              (251, 146, 60), "action"),
 }
 EMOTION_ORDER = list(EMOTIONS)
+# 차분한 감정: 가리키기·인사·웃음 같은 밝은 포즈를 쓰지 않고, 연속 씬이어도 같은 포즈를 유지하며,
+# 씬 안에서 밝은 감정으로 넘어가지 않는다 (슬픈 장면에서 웃으며 가리키는 부자연스러운 연기 방지)
+CALM_EMOTIONS = {"reflection", "sadness"}
 POSE_EMOTION = {"surprised": "surprise", "thinking": "reflection", "confident": "emphasis",
                 "pointing": "conclusion", "waving": "greeting"}
 
@@ -190,6 +198,8 @@ def _emotion(text: str, section: str, order: int, first: bool, last: bool) -> st
     """문장 하나의 감정. 키워드 2점/개 + 섹션 1점 + 문장 부호·위치 가산점, 동점은 씬 순서로 돌려 가며."""
     scores = {e: 2 * sum(k in text for k in d.keywords) + (1 if section in d.sections else 0)
               for e, d in EMOTIONS.items()}
+    if scores["sadness"]:
+        scores["sadness"] += 2  # 슬픈 단어는 분위기를 강하게 결정 (회상 키워드와 섞여도 슬픔 우선)
     end = text.rstrip()[-1:] if text.strip() else ""
     if end == "?":
         scores["question"] += 4
@@ -207,6 +217,8 @@ def _emotion(text: str, section: str, order: int, first: bool, last: bool) -> st
 def _pose_for(emotion: str, available, avoid: str | None, order: int) -> str:
     """감정에 어울리는 포즈 중 avoid(바로 앞 포즈)가 아닌 첫 번째. 없으면 다른 아무 포즈."""
     preferred = [p for p in EMOTIONS[emotion].poses if p in available]
+    if emotion in CALM_EMOTIONS and preferred:
+        return preferred[0]     # 차분한 장면은 앞 씬과 같은 포즈여도 어울리는 포즈 유지
     names = sorted(available)
     others = sorted(names, key=lambda p: (names.index(p) - order) % len(names))
     for pose in preferred + others:
@@ -232,6 +244,8 @@ def _plan_scene(available, section: str, on_screen: str, narration: str, order: 
     for at, emotion in parts[1:]:
         if len(beats) >= MAX_BEATS:
             break
+        if beats[-1].emotion in CALM_EMOTIONS and emotion not in CALM_EMOTIONS:
+            continue            # 슬픔·회상 뒤에 밝은 연기(가리키기·웃음)로 넘어가지 않음
         if BEAT_WINDOW[0] <= at <= BEAT_WINDOW[1]:
             pose = _pose_for(emotion, available, beats[-1].pose, order)
             if pose != beats[-1].pose:

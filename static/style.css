@@ -106,9 +106,9 @@ video.clip-thumb { object-fit: cover; background: #000; }
   background: #111827; color: #fff; box-shadow: 0 6px 20px rgba(0,0,0,.25); z-index: 1000; font-size: 14px; }
 .workflow { margin: 4px 0 12px; padding-left: 20px; }
 .workflow li { margin: 2px 0; }
-.luma-prompt { margin-top: 4px; font-size: 12px; }
-.luma-prompt summary { cursor: pointer; color: #6d28d9; }
-.luma-prompt pre { white-space: pre-wrap; background: #f5f3ff; padding: 6px 8px; border-radius: 6px; margin: 4px 0; }
+.video-prompt { margin-top: 4px; font-size: 12px; }
+.video-prompt summary { cursor: pointer; color: #6d28d9; }
+.video-prompt pre { white-space: pre-wrap; background: #f5f3ff; padding: 6px 8px; border-radius: 6px; margin: 4px 0; }
 
 /* ---- 4단계 제작 ---- */
 .step-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; list-style: none; padding: 0; margin: 10px 0; }
@@ -142,3 +142,4 @@ form.heroine-edit { border: 1px solid var(--border); border-radius: 8px; padding
 .badge.heroine { background: #fce7f3; color: #be185d; }
 .heroine-config.disabled { opacity: .5; }
 .heroine-config select { min-width: 220px; }
+.prompt-rewrite { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: -4px; }

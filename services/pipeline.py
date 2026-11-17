@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, object_session
 
 from database import SessionLocal
 from models import ClipStatus, Episode, EpisodeStatus, SceneRenderStatus, Script
-from services import clip_service, llm_service, luma_service, render_service, tts_service
+from services import clip_service, llm_service, render_service, tts_service, video_ai_service
 from services.narration import sanitize_narration
 
 logger = logging.getLogger(__name__)
@@ -197,7 +197,8 @@ def generate_script_for_episode(episode_id: int) -> None:
             data = scene.model_dump()
             # LLM이 연출 지시를 섞어 써도 저장 단계에서 걷어냄 (자막·음성 모두 순수 대사만)
             data["narration"] = sanitize_narration(data["narration"]) or data["narration"]
-            data["heroine"] = bool(data.get("heroine")) and episode.heroine_enabled
+            # 훅은 여자주인공이 기본으로 등장 (편집기에서 끌 수 있음)
+            data["heroine"] = (bool(data.get("heroine")) or section == "hook") and episode.heroine_enabled
             episode.scripts.append(Script(scene_order=i, section=section, image_path=image, **data))
         if episode.heroine_enabled:
             ensure_heroine_scenes(episode)
@@ -218,10 +219,10 @@ def generate_script_for_episode(episode_id: int) -> None:
 
 
 def ensure_heroine_scenes(episode: Episode) -> None:
-    """여자주인공 등장이 켜져 있는데 등장 씬이 하나도 없으면 본문(body) 씬에 등장시킨다 (대본이 정하지 않은 경우의 기본값)."""
+    """여자주인공 등장이 켜져 있는데 등장 씬이 하나도 없으면 훅(hook)·본문(body) 씬에 등장시킨다 (대본이 정하지 않은 경우의 기본값)."""
     if episode.heroine_enabled and not any(s.heroine for s in episode.scripts):
         for s in episode.scripts:
-            s.heroine = s.section == "body"
+            s.heroine = s.section in ("hook", "body")
 
 
 def _set_notice(episode_id: int, message: str) -> None:
@@ -277,7 +278,7 @@ def generate_audio_for_episode(episode_id: int, force: bool = False, script_ids:
         _cleanup_after_job()  # 성공·실패와 관계없이 임시·고아 파일 정리
 
 
-# ---------- 3단계: 씬 영상 (Luma Agents API → 실패·크레딧 부족 시 대체 클립) ----------
+# ---------- 3단계: 씬 영상 (AI 씬 영상 Luma|Runway → 실패·크레딧 부족 시 대체 클립) ----------
 def _specs(scripts: list[Script]) -> list[clip_service.SceneSpec]:
     return [clip_service.spec_for(s, s.episode) for s in scripts]
 
@@ -300,9 +301,9 @@ def _update_clip(script_id: int, state: str, path: Path | None = None, source: s
             old = script.clip_path
             script.clip_path = tts_service.media_path_to_url(path)
             script.clip_source, script.clip_key, script.clip_error = source, key, None
-            # 이전 클립 정리 — 다른 씬이 쓰지 않을 때만. 비용을 들인 Luma 클립은 새 Luma 클립으로 바뀔 때만 지운다
+            # 이전 클립 정리 — 다른 씬이 쓰지 않을 때만. 비용을 들인 AI 클립은 새 AI 클립으로 바뀔 때만 지운다
             # (대체 클립으로 바뀌는 경우엔 보존 → 나중에 대본을 되돌리면 캐시로 다시 쓰임)
-            replaceable = source == "luma" or Path(old or "").stem.startswith("fallback_")
+            replaceable = video_ai_service.is_ai_source(source) or Path(old or "").stem.startswith("fallback_")
             if old and old != script.clip_path and replaceable and not db.scalar(
                     select(func.count()).select_from(Script).where(Script.clip_path == old, Script.id != script_id)):
                 _delete_clip(old)
@@ -313,8 +314,8 @@ def _update_clip(script_id: int, state: str, path: Path | None = None, source: s
 
 def generate_clips_for_episode(episode_id: int, mode: str = "auto", force: bool = False) -> None:
     """3단계: 씬별 캐릭터 연기 클립 생성.
-    mode — auto: Luma로 생성, 실패한 씬·크레딧 부족(402)·Luma 사용 불가 시 대체 클립 (대체 모드)
-           luma: Luma만 (실패한 씬은 failed로 남김) / fallback: Luma 호출 없이 대체 클립만
+    mode — auto: AI 씬 영상(VIDEO_PROVIDER)으로 생성, 실패한 씬·크레딧 부족·사용 불가 시 대체 클립 (대체 모드)
+           ai: AI 씬 영상만 (실패한 씬은 failed로 남김) / fallback: AI 호출 없이 대체 클립만
     force=False면 지금 대본 기준 클립이 이미 있는 씬은 건너뛴다 (비용 절약)."""
     db = SessionLocal()
     try:
@@ -338,32 +339,33 @@ def generate_clips_for_episode(episode_id: int, mode: str = "auto", force: bool 
 
         notices = []
         if pending and mode != "fallback":
-            reason = luma_service.unavailable_reason()
+            name = video_ai_service.label()
+            reason = video_ai_service.unavailable_reason()
             if reason:
-                notices.append(f"Luma를 사용할 수 없습니다 ({reason})."
+                notices.append(f"{name}를 사용할 수 없습니다 ({reason})."
                                + (" 대체 클립으로 만들었습니다." if mode == "auto" else ""))
-                if mode == "luma":
+                if mode == "ai":
                     for i in pending:
                         _update_clip(ids[i], ClipStatus.FAILED.value, error=reason)
                     pending = set()
             else:
                 jobs = [j if j is not None and j.index in pending else None
-                        for j in luma_service.plan_jobs(
+                        for j in video_ai_service.plan_jobs(
                             [(sp.section, sp.visual_prompt, sp.heroine_refs) for sp in specs], acting)]
 
                 def on_update(index: int, state: str, path: Path | None, error: str | None) -> None:
-                    _update_clip(ids[index], state, path, "luma", keys[index][0], error)
+                    _update_clip(ids[index], state, path, video_ai_service.provider().NAME, keys[index][0], error)
 
-                results = luma_service.generate_clips(jobs, on_update)
+                results = video_ai_service.generate_clips(jobs, on_update)
                 pending -= {i for i in pending if results.paths[i] is not None}
                 if results.fatal_kind == "credits":
-                    notices.append(f"Luma 크레딧(잔액)이 부족해 {len(pending)}개 씬을 만들지 못했습니다."
+                    notices.append(f"{name} 크레딧(잔액)이 부족하거나 사용 한도를 넘어 {len(pending)}개 씬을 만들지 못했습니다."
                                    + (" 대체 모드로 전환해 대체 클립으로 만들었습니다." if mode == "auto" else
                                       " 충전 후 다시 실행하거나 '대체 클립만'으로 실행하세요."))
                 elif results.errors:
-                    notices.append(f"Luma로 {len(results.errors)}개 씬을 만들지 못했습니다: {results.reasons()}."
+                    notices.append(f"{name}로 {len(results.errors)}개 씬을 만들지 못했습니다: {results.reasons()}."
                                    + (" 해당 씬은 대체 클립으로 만들었습니다." if mode == "auto" else ""))
-        if pending and mode != "luma":
+        if pending and mode != "ai":
             ffmpeg = render_service.find_ffmpeg()
             for i in sorted(pending):
                 _update_clip(ids[i], ClipStatus.GENERATING.value)
@@ -459,7 +461,7 @@ def render_video_for_episode(episode_id: int, missing_clip: str = "fallback", us
         brand = episode.product_name
         db.commit()  # 렌더링(수십 초) 동안 트랜잭션을 열어두지 않음
 
-        luma_kept = {i for i, s in enumerate(scripts) if s.clip_source == "luma" and s.clip_path}
+        ai_kept = {i for i, s in enumerate(scripts) if video_ai_service.is_ai_source(s.clip_source) and s.clip_path}
         notices = []
         if missing:
             acting = clip_service.plan(specs)
@@ -469,7 +471,7 @@ def render_video_for_episode(episode_id: int, missing_clip: str = "fallback", us
                 for i in missing:
                     path = clip_service.make_fallback_clip(ffmpeg, acting[i])
                     scenes[i].video_path = path
-                    if i not in luma_kept:  # 기존 Luma 클립 기록은 덮어쓰지 않음 (이번 렌더링에만 대체 클립 사용)
+                    if i not in ai_kept:  # 기존 AI 클립 기록은 덮어쓰지 않음 (이번 렌더링에만 대체 클립 사용)
                         _update_clip(ids[i], ClipStatus.COMPLETED.value, path, "fallback", keys[i][1])
                 how = "대체 클립"
             scene_list = ", ".join(f"#{i + 1}" for i in missing)

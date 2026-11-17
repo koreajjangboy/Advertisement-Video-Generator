@@ -1,8 +1,8 @@
 """씬 클립 — 3단계(씬 영상 생성)와 4단계(최종 렌더링)가 공유하는 규칙.
 
 클립 종류 (Script.clip_source)
-- luma    : Luma Agents API로 생성한 캐릭터 연기 영상 (services/luma_service.py)
-- fallback: Luma를 쓸 수 없을 때(크레딧 부족 402, 키 없음, 씬 생성 실패, '대체 클립만' 선택) 로컬에서 만드는 대체 클립.
+- luma | runway: AI 씬 영상 업체(VIDEO_PROVIDER)로 생성한 캐릭터 연기 영상 (services/video_ai_service.py)
+- fallback: AI 씬 영상을 쓸 수 없을 때(크레딧 부족, 키 없음, 씬 생성 실패, '대체 클립만' 선택) 로컬에서 만드는 대체 클립.
             씬 감정선에 맞는 JB 포즈 이미지에 얼굴 쪽으로 다가가는 카메라 무빙(+ 미세한 흔들림)을 주고,
             씬 안에서 감정이 바뀌면(비트 2개) 그 시점에 다음 포즈로 디졸브. API 호출·비용 없음.
 
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import CLIP_DIR, RENDER_PRESET
-from services import host_service, luma_service
+from services import host_service, video_ai_service
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +66,14 @@ def fallback_key(acting: host_service.SceneActing) -> str:
 
 
 def expected_keys(specs: list[SceneSpec]) -> list[tuple[str | None, str | None]]:
-    """씬별 지금 대본 기준 (luma 키, fallback 키). 캐릭터 포즈가 없으면 (None, None)."""
+    """씬별 지금 대본 기준 (AI 클립 키, fallback 키). 캐릭터 포즈가 없으면 (None, None)."""
     keys = []
     for spec, act in zip(specs, plan(specs)):
         if act is None:
             keys.append((None, None))
             continue
-        keys.append((luma_service.content_key(spec.section, spec.visual_prompt, act, heroine_refs=spec.heroine_refs),
+        keys.append((video_ai_service.content_key(spec.section, spec.visual_prompt, act,
+                                                  heroine_refs=spec.heroine_refs),
                      fallback_key(act)))
     return keys
 
@@ -88,7 +89,8 @@ def needs_adoption(script) -> bool:
 def adopt_legacy_clips(scripts) -> int:
     """예전 방식으로 만든 Luma 클립을 지금 키 형식으로 등록 — 다시 생성(과금)할지 판단을 정확히 하기 위해.
     v1 클립은 '포즈 이미지를 첫 프레임으로' 만든 것이므로 pose 방식의 내용 키를 받는다:
-    LUMA_SCENE_FRAME=pose면 그대로 최신, generate(기본)면 '다시 생성 필요'(영상 프롬프트가 장면에 반영되지 않은 클립).
+    첫 프레임 설정(LUMA_/RUNWAY_SCENE_FRAME)이 pose면 그대로 최신, generate면 '다시 생성 필요'(영상 프롬프트가 장면에
+    반영되지 않은 클립).
     대본이 바뀌어 맞지 않는 클립은 이전 키로 남긴다. 등록한 수를 반환."""
     from services import clip_legacy
 
@@ -108,9 +110,9 @@ def adopt_legacy_clips(scripts) -> int:
             adopted += 1
             continue
         prompt = clip_legacy.prompt_v1(spec.section, spec.visual_prompt, act)
-        signature = luma_service._pose_signature(act)
+        signature = video_ai_service.pose_signature(act)
         if script.clip_key == clip_legacy.content_key_v1(prompt, signature) or                 stem in clip_legacy.file_keys_v1(prompt, signature):
-            script.clip_key = luma_service.content_key(spec.section, spec.visual_prompt, act, mode="pose")
+            script.clip_key = video_ai_service.content_key(spec.section, spec.visual_prompt, act, mode="pose")
             adopted += 1
         else:
             script.clip_key = script.clip_key or stem

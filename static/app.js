@@ -41,9 +41,9 @@ async function loadStatus() {
       `TTS: ${tts.provider}${tts.fallback && tts.fallback !== tts.provider ? ` → 폴백 ${tts.fallback}` : ""}` +
         (ttsResting ? ` · 현재 ${tts.active} 사용 중 (한도 초과)` : ""),
       render.ffmpeg ? "FFmpeg 사용 가능" : "FFmpeg 없음",
-      appStatus.video_ai?.enabled ? `AI 씬 영상: Luma ${appStatus.video_ai.model}` : "AI 씬 영상: 꺼짐",
+      appStatus.video_ai?.enabled ? `AI 씬 영상: ${appStatus.video_ai.label} ${appStatus.video_ai.model}` : "AI 씬 영상: 꺼짐",
     ].join(" · ");
-    el.title = appStatus.video_ai?.reason ? `AI 씬 영상(Luma) 꺼짐: ${appStatus.video_ai.reason}` : "";
+    el.title = appStatus.video_ai?.reason ? `AI 씬 영상(${appStatus.video_ai.label}) 꺼짐: ${appStatus.video_ai.reason}` : "";
     el.classList.toggle("warn", ttsResting || llmLimited || !render.ffmpeg);
   } catch { /* 상태 표시는 선택 사항 */ }
 }
@@ -295,8 +295,13 @@ function sceneEditorHtml(s, ep) {
       <label>스티커 이모지 (1~2개, 비우면 자동) <input name="emoji" maxlength="16" value="${escapeHtml(s.emoji)}"></label>
       ${poseSelect(s)}
       ${ep?.heroine_enabled ? `<label class="inline"><input type="checkbox" name="heroine" ${s.heroine ? "checked" : ""}> 이 씬에 여자주인공 등장</label>` : ""}
-      <label>영상 프롬프트 <span class="meta">(Luma 장면 묘사 — 장소·구도·조명·카메라, 영어 권장. 비우면 섹션별 기본 장면)</span>
+      <label>영상 프롬프트 <span class="meta">(AI 씬 영상 장면 묘사 — 장소·구도·조명·카메라, 영어 권장. 비우면 섹션별 기본 장면)</span>
         <textarea name="visual_prompt" rows="3" placeholder="예: Vertical 9:16 cinematography, rainy neon alley at night, slow push-in, moody blue light">${escapeHtml(s.visual_prompt)}</textarea></label>
+      <div class="prompt-rewrite">
+        <button type="button" class="secondary small" data-action="rewrite-prompt"
+          title="지금 입력한 내레이션·호스트 포즈·여자주인공 등장 여부로 영상 프롬프트를 Gemini가 다시 작성 (저장을 눌러야 반영)">영상 프롬프트 다시 작성</button>
+        <span class="meta" data-role="rewrite-status">저장은 입력한 프롬프트를 그대로 저장합니다 — 내레이션·포즈·여자주인공에 맞게 바꾸려면 이 버튼을 누르세요</span>
+      </div>
       <label>길이(초) <input name="duration_sec" type="number" step="0.1" min="0.5" max="60" value="${s.duration_sec}"></label>
       <div class="actions">
         <button type="submit">저장</button>
@@ -350,7 +355,7 @@ const CLIP_STATUS = {
   completed: ["준비됨", "clip-completed"],
   failed: ["실패", "clip-failed"],
 };
-const CLIP_SOURCE = { luma: "Luma", fallback: "대체 클립" };
+const CLIP_SOURCE = { luma: "Luma", runway: "Runway", fallback: "대체 클립" };
 
 function clipLine(s) {
   const [label, cls] = CLIP_STATUS[s.clip_status] || [s.clip_status, ""];
@@ -364,17 +369,18 @@ function clipLine(s) {
   return `<div class="meta"><span class="badge ${cls}">${label}${source}</span>${stale}${link}${frame}${error}</div>`;
 }
 
-// Luma에 실제로 보낼 프롬프트 (사용자 '영상 프롬프트'가 맨 앞, 나머지는 자동으로 덧붙는 연기·카메라·일관성 지시)
-function lumaPromptDetails(s) {
-  const p = s.luma_prompt;
+// AI 씬 영상 업체에 실제로 보낼 프롬프트 (사용자 '영상 프롬프트'가 맨 앞, 나머지는 자동으로 덧붙는 연기·카메라·일관성 지시)
+function videoPromptDetails(s) {
+  const p = s.video_prompt;
   if (!p) return "";
   const how = p.mode === "generate"
     ? "① 키프레임: 영상 프롬프트 + JB 포즈 이미지(캐릭터 레퍼런스) → ② 그 키프레임에서 영상 생성"
     : "JB 포즈 이미지를 첫 프레임으로 영상 생성";
-  return `<details class="luma-prompt"><summary>Luma 프롬프트 보기 ${p.user_prompt ? "" : '<span class="warn">(영상 프롬프트 비어 있음 → 기본 장면)</span>'}</summary>
+  return `<details class="video-prompt"><summary>${escapeHtml(p.provider)} 프롬프트 보기 ${p.user_prompt ? "" : '<span class="warn">(영상 프롬프트 비어 있음 → 기본 장면)</span>'}</summary>
     <div class="meta">${how}</div>
-    ${p.heroine_refs?.length ? `<div class="meta">여자주인공 레퍼런스: ${p.heroine_refs.map(escapeHtml).join(", ")} (레퍼런스 이미지 2번부터)</div>` : ""}
-    ${p.heroine_unsupported ? `<div class="warn">이 API 키로는 여자주인공을 함께 넣을 수 없습니다 (Luma Agents API 키 필요).</div>` : ""}
+    ${p.user_prompt_cut ? `<div class="warn">영상 프롬프트가 길어 ${escapeHtml(p.provider)} 길이 한도에 맞게 뒷부분이 잘렸습니다.</div>` : ""}
+    ${p.heroine_refs?.length ? `<div class="meta">여자주인공 레퍼런스: ${p.heroine_refs.map(escapeHtml).join(", ")}</div>` : ""}
+    ${p.heroine_unsupported ? `<div class="warn">이 API 키로는 여자주인공을 함께 넣을 수 없습니다 (Luma Agents API 키 또는 Runway 필요).</div>` : ""}
     ${p.frame ? `<div><b>키프레임</b><pre>${escapeHtml(p.frame)}</pre></div>` : ""}
     <div><b>영상</b><pre>${escapeHtml(p.video)}</pre></div></details>`;
 }
@@ -383,10 +389,10 @@ function clipSummary(ep) {
   const total = ep.scripts.length;
   const ready = ep.scripts.filter((s) => s.clip_path && s.clip_current !== false
     && !["queued", "generating"].includes(s.clip_status));
-  const luma = ready.filter((s) => s.clip_source === "luma").length;
+  const ai = ready.filter((s) => s.clip_source && s.clip_source !== "fallback").length;
   const working = ep.scripts.filter((s) => ["queued", "generating"].includes(s.clip_status)).length;
   const failed = ep.scripts.filter((s) => s.clip_status === "failed").length;
-  return { total, ready: ready.length, luma, fallback: ready.length - luma, working, failed };
+  return { total, ready: ready.length, ai, fallback: ready.length - ai, working, failed };
 }
 
 function clipStep(ep, busy) {
@@ -394,33 +400,34 @@ function clipStep(ep, busy) {
   const ai = appStatus?.video_ai;
   const pct = c.total ? Math.round((c.ready / c.total) * 100) : 0;
   const clipping = ep.status === "clipping";
-  const lumaNote = ai?.enabled
-    ? `Luma ${escapeHtml(ai.model)} · 씬당 ${escapeHtml(ai.duration)} · 실패·크레딧 부족 시 대체 클립`
-    : `Luma 꺼짐${ai?.reason ? ` (${escapeHtml(ai.reason)})` : ""} → 대체 클립으로 생성`;
+  const name = escapeHtml(ai?.label || "AI");
+  const aiNote = ai?.enabled
+    ? `${name} ${escapeHtml(ai.model)} · 씬당 ${escapeHtml(ai.duration)} · 실패·크레딧 부족 시 대체 클립`
+    : `${name} 꺼짐${ai?.reason ? ` (${escapeHtml(ai.reason)})` : ""} → 대체 클립으로 생성`;
   const rows = ep.scripts.map((s, i) => `
     <li>
       ${s.clip_path
         ? `<video class="thumb clip-thumb" src="${s.clip_path}" muted loop playsinline preload="metadata"
              title="씬 영상 (마우스를 올리면 재생)"></video>`
         : `<div class="thumb empty">${i + 1}</div>`}
-      <div><b>${i + 1}. ${escapeHtml(s.on_screen_text)}</b>${clipLine(s)}${lumaPromptDetails(s)}</div>
+      <div><b>${i + 1}. ${escapeHtml(s.on_screen_text)}</b>${clipLine(s)}${videoPromptDetails(s)}</div>
     </li>`).join("");
   return `
     <section class="step ${clipping ? "active" : ""}">
-      <div class="stage-title">3단계 · Luma 씬 영상 <span class="meta">${lumaNote}</span></div>
+      <div class="stage-title">3단계 · ${name} 씬 영상 <span class="meta">${aiNote}</span></div>
       <div class="progress" title="${c.ready}/${c.total}개 준비"><div style="width:${pct}%"></div></div>
       <div class="meta">${clipping ? `생성 중 — ${c.ready}/${c.total}개 준비 (진행 ${c.working}개)` : `${c.ready}/${c.total}개 준비`}
-        ${c.ready ? ` · Luma ${c.luma} · 대체 ${c.fallback}` : ""}${c.failed ? ` · <span class="warn">실패 ${c.failed}</span>` : ""}</div>
+        ${c.ready ? ` · AI ${c.ai} · 대체 ${c.fallback}` : ""}${c.failed ? ` · <span class="warn">실패 ${c.failed}</span>` : ""}</div>
       <ol class="clip-list">${rows}</ol>
       <div class="stage-actions">
         <select data-role="clip-mode" ${busy ? "disabled" : ""} title="생성 방식">
-          <option value="auto">Luma (실패 시 대체 클립)</option>
-          <option value="luma">Luma만</option>
+          <option value="auto">${name} (실패 시 대체 클립)</option>
+          <option value="ai">${name}만</option>
           <option value="fallback">대체 클립만 (무료)</option>
         </select>
         <label class="inline"><input type="checkbox" data-role="clip-force" ${busy ? "disabled" : ""}> 모두 다시 생성</label>
         <button data-action="generate-clips" data-id="${ep.id}" ${ep.scripts.length && !busy ? "" : "disabled"}>
-          ${clipping ? "생성 중…" : "3단계: Luma 씬 영상 생성하기"}</button>
+          ${clipping ? "생성 중…" : `3단계: ${name} 씬 영상 생성하기`}</button>
       </div>
     </section>`;
 }
@@ -572,7 +579,7 @@ const STEP_ACTIONS = {
   script: (id) => ["/api/generate-script", { episode_id: id }],
   "generate-tts": (id, step) => ["/api/generate-tts", {
     episode_id: id, force: step.querySelector('[data-role="tts-force"]').checked }],
-  "generate-clips": (id, step) => ["/api/generate-luma-clips", {
+  "generate-clips": (id, step) => ["/api/generate-scene-clips", {
     episode_id: id,
     mode: step.querySelector('[data-role="clip-mode"]').value,
     force: step.querySelector('[data-role="clip-force"]').checked }],
@@ -587,7 +594,7 @@ function confirmStep(action, body, episodeEl) {
     return confirm("대본을 다시 만들면 지금 씬들과 씬별 음성이 새 대본으로 바뀝니다. 진행할까요?");
   }
   if (action === "generate-clips" && body.mode !== "fallback" && appStatus?.video_ai?.enabled) {
-    return confirm("Luma 크레딧이 사용됩니다 (이미 최신 씬 영상이 있는 씬은 건너뜀). 진행할까요?");
+    return confirm(`${appStatus.video_ai.label} 크레딧이 사용됩니다 (이미 최신 씬 영상이 있는 씬은 건너뜀). 진행할까요?`);
   }
   return true;
 }
@@ -608,6 +615,29 @@ $episodes.addEventListener("click", async (e) => {
     li.querySelector(".scene-editor").remove();
     li.querySelector(".scene-view").hidden = false;
     if (!$episodes.querySelector(".scene-editor")) loadEpisodes(); // 편집 중 밀린 갱신 반영
+    return;
+  }
+  // 1단계: 편집 중인 내레이션·포즈·여자주인공 여부로 영상 프롬프트 다시 작성 (저장 전 미리 채우기)
+  if (action === "rewrite-prompt") {
+    const form = btn.closest(".scene-editor");
+    const status = form.querySelector('[data-role="rewrite-status"]');
+    const heroineBox = form.querySelector('[name="heroine"]');
+    const poseSelect = form.querySelector('[name="host_pose"]');
+    const body = { narration: form.querySelector('[name="narration"]').value };
+    if (poseSelect) body.host_pose = poseSelect.value;
+    if (heroineBox) body.heroine = heroineBox.checked;
+    btn.disabled = true;
+    status.textContent = "작성 중…";
+    try {
+      const r = await api(`/api/scripts/${form.dataset.id}/visual-prompt`, { method: "POST", body: JSON.stringify(body) });
+      form.querySelector('[name="visual_prompt"]').value = r.visual_prompt;
+      status.textContent = `${r.provider} · 포즈/감정: ${r.pose} — 저장을 눌러야 반영됩니다`;
+    } catch (err) {
+      status.textContent = "";
+      alert(err.message);
+    } finally {
+      btn.disabled = false;
+    }
     return;
   }
   if (action === "edit-heroine" || action === "cancel-heroine") {

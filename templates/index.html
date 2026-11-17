@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>숏폼 광고 생성기</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ asset_version['style.css'] }}">
 </head>
 <body>
   <header class="row"><h1>숏폼 광고 영상 생성기</h1><span id="tts-status" class="meta"></span></header>
@@ -45,13 +45,13 @@
       <ol class="workflow meta">
         <li><b>1단계: 대본 생성 및 편집</b> — 씬별 내레이션·화면 자막·영상 프롬프트를 확인하고 수정·저장</li>
         <li><b>2단계: 음성(TTS) 제작하기</b> — 확정된 대본으로 씬별 음성을 만들고 미리 듣기 (씬 하나만 다시 만들 수도 있음)</li>
-        <li><b>3단계: Luma 씬 영상 생성하기</b> — 씬마다 JB가 대본을 연기하는 클립 (Luma 크레딧 부족·실패 시 대체 클립)</li>
+        <li><b>3단계: AI 씬 영상 생성하기</b> — 씬마다 JB가 대본을 연기하는 클립 (Luma 또는 Runway, 크레딧 부족·실패 시 대체 클립)</li>
         <li><b>4단계: 최종 FFmpeg 렌더링 실행</b> — 씬 영상 + 음성 + BGM + 자막을 합쳐 숏폼 완성, 미리보기·다운로드</li>
       </ol>
       <div id="episodes"></div>
     </section>
   </main>
 
-  <script src="{{ url_for('static', path='app.js') }}"></script>
+  <script src="{{ url_for('static', path='app.js') }}?v={{ asset_version['app.js'] }}"></script>
 </body>
 </html>

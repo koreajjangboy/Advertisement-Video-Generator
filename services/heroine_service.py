@@ -3,7 +3,7 @@
 - 폴더는 에피소드마다 지정 (기본 HEROINE_DIR = media/images/caoting). 프로젝트 기준 상대 경로나 절대 경로 모두 받되,
   웹에서 임의의 디스크 경로를 읽지 못하도록 media/ 안쪽만 허용한다. DB에는 프로젝트 기준 상대 경로로 저장.
 - 레퍼런스: 대표 이미지(heroine_ref)를 맨 앞에, 나머지는 이름순으로 최대 HEROINE_MAX_REFS장.
-  대표 이미지는 헤어스타일·의상 기준, 나머지는 같은 사람 얼굴 확인용으로 Luma 이미지 모델에 전달된다.
+  대표 이미지는 헤어스타일·의상 기준, 나머지는 같은 사람 얼굴 확인용으로 AI 씬 영상 업체의 이미지 모델에 전달된다.
 """
 
 from pathlib import Path
@@ -37,7 +37,7 @@ def list_images(folder: Path) -> list[Path]:
 
 
 def references(dir_value: str | None, main: str = "") -> list[Path]:
-    """Luma에 넘길 레퍼런스 이미지 (대표 이미지 먼저). 폴더가 없거나 비었으면 []."""
+    """이미지 모델에 넘길 레퍼런스 이미지 (대표 이미지 먼저). 폴더가 없거나 비었으면 []."""
     try:
         images = list_images(resolve_dir(dir_value))
     except ValueError:

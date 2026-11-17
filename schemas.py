@@ -37,6 +37,20 @@ class ScriptUpdate(BaseModel):
     duration_sec: float | None = Field(None, ge=0.5, le=60)
 
 
+class VisualPromptRequest(BaseModel):
+    """씬 편집 화면의 '영상 프롬프트 다시 작성' — 저장 전 편집 중인 값 (보내지 않은 필드는 저장된 씬 값)."""
+
+    narration: str | None = None
+    host_pose: str | None = Field(None, max_length=20)   # ""이면 자동 (대본 감정에 맞게)
+    heroine: bool | None = None
+
+
+class VisualPromptOut(BaseModel):
+    visual_prompt: str
+    provider: str      # 사용한 Gemini 모델 또는 mock
+    pose: str          # LLM에 전달한 호스트 포즈/감정
+
+
 class TTSPreviewRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
@@ -70,9 +84,10 @@ class ScriptOut(BaseModel):
     clip_status: str = "none"
     clip_error: str | None = None
     clip_key: str | None = Field(None, exclude=True)  # 최신 여부 계산용 (응답에는 포함하지 않음)
-    clip_frame: str | None = None      # Luma가 만든 장면 키프레임 이미지 (generate 방식일 때)
-    # Luma에 실제로 보낼 프롬프트 미리보기 {mode, user_prompt, frame, video} — 캐릭터 모드가 아니면 None
-    luma_prompt: dict | None = None
+    clip_frame: str | None = None      # AI 씬 영상 업체가 만든 장면 키프레임 이미지 (generate 방식일 때)
+    # AI 씬 영상 업체에 실제로 보낼 프롬프트 미리보기 {provider, mode, user_prompt, frame, video, …}
+    # — 캐릭터 모드가 아니면 None
+    video_prompt: dict | None = None
     # 클립이 지금 대본 기준인지 (대본·포즈를 고치면 False → 1단계 다시 실행 필요). 클립이 없으면 None
     clip_current: bool | None = None
     # 렌더링 때 캐릭터가 이 씬에서 연기할 내용 (지정 포즈 또는 대본 감정선 기반 자동). 캐릭터 모드가 아니면 None.
@@ -107,9 +122,9 @@ class TTSGenerateRequest(BaseModel):
 
 class ClipGenerateRequest(BaseModel):
     episode_id: int
-    # auto: Luma로 생성하고 실패·크레딧 부족(402)이면 대체 클립 / luma: Luma만 (실패 씬은 실패로 남김)
-    # fallback: Luma를 호출하지 않고 대체 클립만 (무료)
-    mode: str = Field("auto", pattern="^(auto|luma|fallback)$")
+    # auto: AI 씬 영상(VIDEO_PROVIDER)으로 생성하고 실패·크레딧 부족이면 대체 클립 / ai: AI 씬 영상만 (실패 씬은 실패로 남김)
+    # fallback: AI를 호출하지 않고 대체 클립만 (무료)
+    mode: str = Field("auto", pattern="^(auto|ai|fallback)$")
     force: bool = False  # 이미 최신 클립이 있는 씬도 다시 생성
 
 
@@ -147,14 +162,14 @@ class EpisodeOut(BaseModel):
 
         acting = host_service.plan_acting(
             [(s.section, s.on_screen_text, s.narration, s.scene_order, s.host_pose) for s in self.scripts])
-        from services import clip_service, luma_service
+        from services import clip_service, video_ai_service
 
         specs = [clip_service.spec_for(s, self) for s in self.scripts]
         for script, act, spec in zip(self.scripts, acting, specs):
             script._apply_acting(act)
             if act is not None:
-                script.luma_prompt = luma_service.prompt_preview(script.section, script.visual_prompt, act,
-                                                                 spec.heroine_refs)
+                script.video_prompt = video_ai_service.prompt_preview(script.section, script.visual_prompt, act,
+                                                                      spec.heroine_refs)
             if script.clip_path:
                 from services import tts_service
 

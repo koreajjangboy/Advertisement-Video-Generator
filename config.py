@@ -85,12 +85,46 @@ RENDER_PRESET = os.getenv("RENDER_PRESET", "veryfast")  # x264 preset (ultrafast
 RENDER_CRF = int(os.getenv("RENDER_CRF", "21"))
 RENDER_TIMEOUT_SEC = int(os.getenv("RENDER_TIMEOUT_SEC", "900"))
 
-# AI 씬 영상 (Luma, Image-to-Video)
+# AI 씬 영상 (Image-to-Video)
 #   HOST_POSE_DIR의 캐릭터 포즈 이미지를 첫 프레임으로, 씬 대본·감정으로 만든 프롬프트로 씬별 연기 클립을 생성해
-#   배경 영상으로 쓴다. 키가 없거나, API_MODE가 live가 아니거나, 호출이 실패한 씬은 기존 렌더링(캐릭터 카드 +
-#   켄 번즈 배경)으로 자동 대체된다.
-# 앞뒤 공백·따옴표는 제거 (복사·붙여넣기 실수로 인증이 실패하지 않도록)
-LUMA_API_KEY = os.getenv("LUMA_API_KEY", "").strip().strip("\"'").strip()
+#   배경 영상으로 쓴다. 키가 없거나, API_MODE가 live가 아니거나, 호출이 실패한 씬은 대체 클립으로 자동 대체된다.
+# 업체: luma | runway (services/video_ai_service.py가 공통 흐름, 업체별 요청은 services/{업체}_service.py)
+VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", "runway").strip().lower()
+if VIDEO_PROVIDER not in ("luma", "runway"):
+    raise RuntimeError(f"지원하지 않는 VIDEO_PROVIDER: {VIDEO_PROVIDER} (luma | runway)")
+# 프롬프트에 쓰는 캐릭터 외형 설명 (얼굴·옷이 씬마다 바뀌지 않도록 고정). 예전 이름 LUMA_CHARACTER도 읽는다.
+# 클립 내용 키에 들어가므로 바꾸면 기존 클립이 모두 '다시 생성 필요'가 된다.
+VIDEO_CHARACTER = (os.getenv("VIDEO_CHARACTER") or os.getenv("LUMA_CHARACTER")
+                   or "the young Korean man with dark tousled hair in a red hoodie")
+LUMA_CHARACTER = VIDEO_CHARACTER  # services/clip_legacy.py(예전 클립 식별용 고정 사본)가 쓰는 이름
+# AI 씬 영상의 캐릭터 레퍼런스로 쓸 포즈 이미지 (씬 포즈와 무관하게 고정 — 얼굴·머리·옷만 맞추는 용도).
+# 표정·동작은 영상 프롬프트를 따른다. 포즈 이름: surprised | thinking | confident | pointing | waving
+VIDEO_REF_POSE = os.getenv("VIDEO_REF_POSE", "thinking").strip().lower()
+
+
+def _key(name: str) -> str:
+    # 앞뒤 공백·따옴표는 제거 (복사·붙여넣기 실수로 인증이 실패하지 않도록)
+    return os.getenv(name, "").strip().strip("\"'").strip()
+
+
+# ---- Runway (VIDEO_PROVIDER=runway) — dev.runwayml.com에서 발급한 API 키 ----
+RUNWAY_API_KEY = _key("RUNWAY_API_KEY")
+RUNWAY_ENABLED = _bool("RUNWAY_ENABLED", "true")
+RUNWAY_API_BASE = os.getenv("RUNWAY_API_BASE", "https://api.dev.runwayml.com/v1").rstrip("/")
+RUNWAY_API_VERSION = os.getenv("RUNWAY_API_VERSION", "2024-11-06")  # X-Runway-Version 헤더 (필수)
+RUNWAY_MODEL = os.getenv("RUNWAY_MODEL", "gen4.5")              # gen4.5(12크레딧/초) | gen4_turbo(5크레딧/초) 등
+RUNWAY_RATIO = os.getenv("RUNWAY_RATIO", "720:1280")             # 세로 9:16
+RUNWAY_DURATION = int(os.getenv("RUNWAY_DURATION", "5"))         # 초 (gen4.5: 2~10)
+# 씬 첫 프레임: pose = JB 포즈 이미지를 그대로 / generate = gen4_image로 장면 키프레임을 먼저 만듦 (씬마다 이미지 1장 추가)
+# 여자주인공 등장 씬은 두 사람이 함께 있는 첫 프레임이 필요하므로 pose여도 키프레임을 만든다.
+RUNWAY_SCENE_FRAME = os.getenv("RUNWAY_SCENE_FRAME", "pose").lower()
+RUNWAY_IMAGE_MODEL = os.getenv("RUNWAY_IMAGE_MODEL", "gen4_image")
+RUNWAY_CONCURRENCY = int(os.getenv("RUNWAY_CONCURRENCY", "4"))  # 계정 동시 실행 한도를 넘으면 THROTTLED로 대기
+RUNWAY_POLL_SEC = float(os.getenv("RUNWAY_POLL_SEC", "5"))
+RUNWAY_TIMEOUT_SEC = int(os.getenv("RUNWAY_TIMEOUT_SEC", "900"))  # 클립 하나 대기 한도 (THROTTLED 대기 포함)
+
+# ---- Luma (VIDEO_PROVIDER=luma) ----
+LUMA_API_KEY = _key("LUMA_API_KEY")
 # API 종류는 키 형식으로 자동 선택
 #   agents       : Luma API Platform(platform.lumalabs.ai) 키 'luma-api-…' → https://agents.lumalabs.ai/v1, ray-3.2
 #   dream-machine: 예전 Dream Machine API 키 'luma-…'           → https://api.lumalabs.ai/dream-machine/v1, ray-2
@@ -109,15 +143,6 @@ LUMA_DURATION = os.getenv("LUMA_DURATION", "5s")           # agents: 5s (첫 프
 #                  필요 → {LUMA_IMAGE_BASE_URL}/media/images/JB/00.png 형태로 전달
 # http(s)://로 시작하지 않는 값은 무시한다.
 LUMA_IMAGE_BASE_URL = os.getenv("LUMA_IMAGE_BASE_URL", "").strip().rstrip("/")
-# 프롬프트에 쓰는 캐릭터 외형 설명 (얼굴·옷이 씬마다 바뀌지 않도록 고정)
-LUMA_CHARACTER = os.getenv("LUMA_CHARACTER", "the young Korean man with dark tousled hair in a red hoodie")
-# 여자주인공 — 에피소드 생성 화면에서 등장 여부·이미지 폴더를 고른다 (아래는 기본값)
-#   폴더 안 이미지 중 대표 이미지(헤어스타일·의상 기준) + 나머지(얼굴 일관성용)를 최대 HEROINE_MAX_REFS장까지
-#   Luma 이미지 모델에 캐릭터 레퍼런스로 넘겨, 여자주인공 등장 씬의 키프레임을 JB와 함께 만든다.
-HEROINE_DIR = os.getenv("HEROINE_DIR", "media/images/caoting")
-HEROINE_CHARACTER = os.getenv("HEROINE_CHARACTER",
-                              "a graceful young East Asian woman with long dark hair in an elegant white qipao-style dress")
-HEROINE_MAX_REFS = int(os.getenv("HEROINE_MAX_REFS", "3"))
 # 씬 첫 프레임 만드는 방법
 #   generate: 씬의 '영상 프롬프트' + JB 포즈 이미지(캐릭터 레퍼런스)로 이미지 모델(uni-1)이 '그 장면 속의 JB' 키프레임을
 #             만들고, 그 키프레임에서 영상을 시작 → 프롬프트의 장소·구도·조명이 영상에 반영됨 (씬마다 이미지 1장 추가 비용)
@@ -127,6 +152,14 @@ LUMA_IMAGE_MODEL = os.getenv("LUMA_IMAGE_MODEL", "uni-1")  # uni-1 | uni-1-max (
 LUMA_CONCURRENCY = int(os.getenv("LUMA_CONCURRENCY", "4"))  # 동시 생성 수 (Build 티어 최대 10)
 LUMA_POLL_SEC = float(os.getenv("LUMA_POLL_SEC", "5"))
 LUMA_TIMEOUT_SEC = int(os.getenv("LUMA_TIMEOUT_SEC", "600"))  # 클립 하나 생성 대기 한도
+
+# 여자주인공 — 에피소드 생성 화면에서 등장 여부·이미지 폴더를 고른다 (아래는 기본값)
+#   폴더 안 이미지 중 대표 이미지(헤어스타일·의상 기준) + 나머지(얼굴 일관성용)를 최대 HEROINE_MAX_REFS장까지
+#   이미지 모델에 캐릭터 레퍼런스로 넘겨, 여자주인공 등장 씬의 키프레임을 JB와 함께 만든다 (Runway는 최대 2장).
+HEROINE_DIR = os.getenv("HEROINE_DIR", "media/images/caoting")
+HEROINE_CHARACTER = os.getenv("HEROINE_CHARACTER",
+                              "a cheerful young East Asian anime woman with a delicate youthful face, fair natural skin, large expressive warm brown eyes, soft natural eyebrows, a small refined nose, rosy cheeks, and a bright playful smile, long dark brown-black hair styled in two high messy space buns, soft wispy side-swept bangs, long loose wavy sidelocks framing both sides of her face, slender youthful figure, wearing a light blue textured button-front cardigan over a simple fitted white cropped short-sleeve T-shirt, a dark plaid pleated skirt, and a black backpack with shoulder straps, small simple earrings, fresh casual student fashion, lively and approachable presence, natural youthful charm")
+HEROINE_MAX_REFS = int(os.getenv("HEROINE_MAX_REFS", "3"))
 
 MEDIA_DIR = BASE_DIR / os.getenv("MEDIA_DIR", "media")
 AUDIO_DIR = MEDIA_DIR / "audio"

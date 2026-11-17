@@ -12,7 +12,7 @@ class EpisodeStatus(str, enum.Enum):
     SCRIPTING = "scripting"      # 대본 생성 중
     SCRIPTED = "scripted"        # 대본 생성 완료
     VOICING = "voicing"          # TTS 음성 생성 중
-    CLIPPING = "clipping"        # 1단계: 씬 영상(Luma/대체 클립) 생성 중
+    CLIPPING = "clipping"        # 1단계: 씬 영상(AI/대체 클립) 생성 중
     CLIPPED = "clipped"          # 1단계 완료 — 최종 렌더링 대기
     RENDERING = "rendering"      # 2단계: 최종 영상 렌더링 중
     DONE = "done"                # 완료
@@ -24,7 +24,7 @@ class SceneRenderStatus(str, enum.Enum):
 
     PENDING = "pending"          # 음성 없음 (TTS 필요)
     READY = "ready"              # 음성 준비됨, 렌더링 대기 (또는 수정되어 재렌더링 필요)
-    GENERATING = "generating"    # AI 씬 영상(Luma) 생성 중
+    GENERATING = "generating"    # AI 씬 영상(Luma·Runway) 생성 중
     RENDERING = "rendering"      # 렌더링 중
     COMPLETED = "completed"      # 최신 영상에 반영됨
     FAILED = "failed"            # 렌더링 실패
@@ -35,8 +35,8 @@ class ClipStatus(str, enum.Enum):
 
     NONE = "none"                # 아직 없음
     QUEUED = "queued"            # 생성 대기
-    GENERATING = "generating"    # 생성 중 (Luma 요청·폴링 또는 대체 클립 합성)
-    COMPLETED = "completed"      # 준비됨 (clip_source: luma | fallback)
+    GENERATING = "generating"    # 생성 중 (AI 요청·폴링 또는 대체 클립 합성)
+    COMPLETED = "completed"      # 준비됨 (clip_source: luma | runway | fallback)
     FAILED = "failed"            # 실패 (clip_error)
 
 
@@ -95,7 +95,7 @@ class Script(Base):
     render_status: Mapped[str] = mapped_column(String(20), default=SceneRenderStatus.PENDING.value)
     # 1단계 씬 영상
     clip_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # /media/clips/...
-    clip_source: Mapped[str | None] = mapped_column(String(20), nullable=True)  # luma | fallback
+    clip_source: Mapped[str | None] = mapped_column(String(20), nullable=True)  # luma | runway | fallback
     clip_status: Mapped[str] = mapped_column(String(20), default=ClipStatus.NONE.value)
     clip_key: Mapped[str | None] = mapped_column(String(64), nullable=True)   # 만들 때의 대본 기준 키 (최신 여부 판단)
     clip_error: Mapped[str | None] = mapped_column(String(500), nullable=True)

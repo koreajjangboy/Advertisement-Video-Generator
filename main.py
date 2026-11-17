@@ -18,10 +18,10 @@ from routers.common import ensure_idle as _ensure_idle
 from routers.common import get_episode_or_404 as _get_or_404
 from schemas import (
     EpisodeCreate, EpisodeOut, EpisodeUpdate, RenderFinalRequest, ScriptGenerateRequest, ScriptOut, ScriptUpdate, TTSGenerateRequest,
-    TTSPreviewOut, TTSPreviewRequest,
+    TTSPreviewOut, TTSPreviewRequest, VisualPromptOut, VisualPromptRequest,
 )
 from services import (
-    clip_service, heroine_service, host_service, llm_service, luma_service, pipeline, render_service, tts_service,
+    clip_service, heroine_service, host_service, llm_service, pipeline, render_service, tts_service, video_ai_service,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -99,7 +99,10 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 # ---------- 관리자 대시보드 ----------
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+    # 정적 파일 수정 시각을 주소에 붙여, 코드가 바뀌면 브라우저가 캐시된 예전 app.js/style.css를 쓰지 않게 한다
+    static = BASE_DIR / "static"
+    version = {name: int((static / name).stat().st_mtime) for name in ("app.js", "style.css")}
+    return templates.TemplateResponse(request, "index.html", {"asset_version": version})
 
 
 # ---------- API ----------
@@ -263,6 +266,40 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
     return script
 
 
+@app.post("/api/scripts/{script_id}/visual-prompt", response_model=VisualPromptOut)
+def rewrite_visual_prompt(script_id: int, payload: VisualPromptRequest, db: Session = Depends(get_db)):
+    """편집 중인 내레이션·호스트 포즈·여자주인공 등장 여부로 영상 프롬프트를 Gemini로 다시 작성 (저장하지 않음)."""
+    script = db.get(Script, script_id)
+    if script is None:
+        raise HTTPException(404, "씬을 찾을 수 없습니다.")
+    episode = script.episode
+    narration = payload.narration if payload.narration is not None else script.narration
+    explicit = payload.host_pose if payload.host_pose is not None else script.host_pose
+    heroine = episode.heroine_enabled and (payload.heroine if payload.heroine is not None else script.heroine)
+    pose = _pose_description(episode, script, narration, explicit)
+    try:
+        text, provider = llm_service.rewrite_visual_prompt(narration, pose, heroine, script.section,
+                                                           video_ai_service.scene_prompt_budget(heroine))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except llm_service.LLMRateLimited as e:
+        raise _rate_limited(e)
+    except Exception as e:
+        raise HTTPException(502, f"영상 프롬프트 작성 실패: {e}")
+    return VisualPromptOut(visual_prompt=text, provider=provider, pose=pose)
+
+
+def _pose_description(episode: Episode, script: Script, narration: str, explicit: str | None) -> str:
+    """씬의 호스트 포즈/감정 (예: "놀람 (놀람·반전)", 비트가 둘이면 "… → …"). 자동이면 대본 감정으로 계산."""
+    scenes = [(s.section, s.on_screen_text, narration if s.id == script.id else s.narration, s.scene_order,
+               (explicit if s.id == script.id else s.host_pose) or "") for s in episode.scripts]
+    acting = host_service.plan_acting(scenes)[[s.id for s in episode.scripts].index(script.id)]
+    if acting is None:
+        return host_service.POSE_LABELS.get(explicit or "", "자동")
+    return " → ".join(f"{host_service.POSE_LABELS[b.pose]} ({host_service.EMOTIONS[b.emotion].label})"
+                      for b in acting.beats)
+
+
 @app.post("/api/scripts/{script_id}/tts", response_model=ScriptOut)
 def generate_scene_audio(script_id: int, db: Session = Depends(get_db)):
     """씬 1개 TTS를 동기 실행 (수정 직후 바로 들어보기용)."""
@@ -340,7 +377,7 @@ def app_status():
         "tts": {"provider": TTS_PROVIDER, "fallback": TTS_FALLBACK or None, "active": tts_service.active_provider()},
         "render": {"ffmpeg": render_service.find_ffmpeg(), "font": render_service.find_font()},
         "host": {"mode": host_service.mode(), "poses": host_service.pose_catalog()},
-        "video_ai": luma_service.status(),
+        "video_ai": video_ai_service.status(),
         "heroine": {"default_dir": HEROINE_DIR},
     }
 
